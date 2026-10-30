@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Git Atlas",
+    "description": "A left-sidebar panel that shows a project's branches, upstream sync state, working tree, and commit graph."
+  }
+}

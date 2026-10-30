@@ -1,0 +1,42 @@
+{
+  "name": "@local/dsh-git-atlas",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Left-sidebar Git status panel: pick a project, then read its branches, upstream sync state, working tree, and commit graph.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "license": "MIT",
+  "author": "David Labbe",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Davidlab/dsh-git-atlas.git"
+  },
+  "homepage": "https://github.com/Davidlab/dsh-git-atlas",
+  "keywords": [
+    "dsh-plugin",
+    "dsh",
+    "git",
+    "commit-graph",
+    "sidebar"
+  ]
+}

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Git Atlas">
+  <rect width="32" height="32" rx="9" fill="#101823"/>
+  <path d="M11 10v11" stroke="#5b9cf8" stroke-width="2.1" stroke-linecap="round"/>
+  <path d="M11 16h7.2" stroke="#5b9cf8" stroke-width="2.1" stroke-linecap="round"/>
+  <circle cx="11" cy="8.6" r="3" fill="#101823" stroke="#5b9cf8" stroke-width="2.1"/>
+  <circle cx="11" cy="22.4" r="3" fill="#101823" stroke="#5b9cf8" stroke-width="2.1"/>
+  <circle cx="21.4" cy="16" r="3" fill="#101823" stroke="#8ad0a4" stroke-width="2.1"/>
+</svg>
