@@ -47,6 +47,9 @@ const LOOPBACK_HOSTNAMES = ['127.0.0.1', 'localhost', '::1']
 /** Largest repository child scan per project. */
 const MAX_CHILD_REPOS = 8
 
+/** Largest changed-file list returned per repository. */
+const MAX_FILES = 200
+
 /** Plugin configuration is read from the Loader row and clamped in `normalizeSettings`. */
 
 function clampNumber(value, fallback, min, max) {
@@ -294,6 +297,15 @@ function parseStatus(text) {
     untracked: 0,
     conflicted: 0,
     changed: 0,
+    files: [],
+    filesTruncated: false,
+  }
+  const pushFile = entry => {
+    if (status.files.length >= MAX_FILES) {
+      status.filesTruncated = true
+      return
+    }
+    status.files.push(entry)
   }
   for (const line of text.split('\n')) {
     if (line === '') continue
@@ -325,17 +337,41 @@ function parseStatus(text) {
     const kind = line[0]
     if (kind === '?') {
       status.untracked += 1
+      pushFile({ path: line.slice(2), code: '??', untracked: true })
       continue
     }
     if (kind === 'u') {
       status.conflicted += 1
       status.changed += 1
+      const tokens = line.split(' ')
+      pushFile({
+        path: tokens.slice(10).join(' '),
+        code: 'UU',
+        conflicted: true,
+        staged: line[2] !== '.',
+        unstaged: line[3] !== '.',
+      })
       continue
     }
     if (kind === '1' || kind === '2') {
       status.changed += 1
-      if (line[2] !== '.') status.staged += 1
-      if (line[3] !== '.') status.unstaged += 1
+      const index = line[2]
+      const worktree = line[3]
+      if (index !== '.') status.staged += 1
+      if (worktree !== '.') status.unstaged += 1
+      const tokens = line.split(' ')
+      const pathPart = tokens.slice(kind === '2' ? 9 : 8).join(' ')
+      const [path, original] = pathPart.split('\t')
+      let code = ''
+      if (index !== '.') code += index
+      if (worktree !== '.') code += worktree
+      pushFile({
+        path,
+        origPath: original !== undefined && original !== '' ? original : undefined,
+        code: code === '' ? '·' : code,
+        staged: index !== '.',
+        unstaged: worktree !== '.',
+      })
     }
   }
   return status
@@ -500,6 +536,8 @@ async function snapshotRepo(path, settings) {
       conflicted: status.conflicted,
       changed: status.changed,
       total: status.changed + status.untracked,
+      files: status.files,
+      filesTruncated: status.filesTruncated,
     },
     branches,
     commits,

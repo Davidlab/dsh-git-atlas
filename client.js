@@ -86,6 +86,13 @@ window.__ModuleLoader__.load({
       'branches.behind': '↓{n}',
       'commit.noSubject': '(no subject)',
       'refs.more': '+{n}',
+      'files.title': 'Changed files',
+      'files.count': '{n} file(s)',
+      'files.truncated': 'first {shown} of {total}',
+      'files.staged': 'staged',
+      'files.unstaged': 'unstaged',
+      'files.untracked': 'untracked',
+      'files.conflicted': 'conflicted',
       'relative.now': 'just now',
       'relative.minutes': '{n}m ago',
       'relative.hours': '{n}h ago',
@@ -163,6 +170,13 @@ window.__ModuleLoader__.load({
       'branches.behind': '↓{n}',
       'commit.noSubject': '（无标题）',
       'refs.more': '+{n}',
+      'files.title': '改动文件',
+      'files.count': '{n} 个文件',
+      'files.truncated': '显示前 {shown} 个，共 {total} 个',
+      'files.staged': '已暂存',
+      'files.unstaged': '未暂存',
+      'files.untracked': '未跟踪',
+      'files.conflicted': '冲突',
       'relative.now': '刚刚',
       'relative.minutes': '{n} 分钟前',
       'relative.hours': '{n} 小时前',
@@ -209,6 +223,18 @@ window.__ModuleLoader__.load({
 .ga-sectionHead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px}
 .ga-sectionHead h2{margin:0;font-size:14px;line-height:22px;font-weight:500}
 .ga-hint{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}
+.ga-files{list-style:none;margin:0;padding:0;border:.5px solid var(--dsw-alias-border-l1);border-radius:14px;max-height:280px;overflow:auto;background:var(--dsw-alias-bg-base)}
+.ga-file{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:.5px solid var(--dsw-alias-border-l1);font-size:12.5px;line-height:18px}
+.ga-file:last-child{border-bottom:0}
+.ga-fileCode{display:inline-flex;align-items:center;justify-content:center;flex:none;min-width:26px;height:18px;padding:0 5px;border-radius:5px;background:var(--dsw-alias-bg-layer-2);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10.5px;line-height:18px;font-weight:500;color:var(--dsw-alias-label-secondary)}
+.ga-fileOk{color:var(--dsw-alias-state-success-primary)}
+.ga-fileWarn{color:var(--dsw-alias-state-warn-primary)}
+.ga-fileBad{color:var(--dsw-alias-state-error-primary)}
+.ga-fileMuted{color:var(--dsw-alias-label-tertiary)}
+.ga-filePath{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ga-fileDir{color:var(--dsw-alias-label-caption)}
+.ga-fileBase{color:var(--dsw-alias-label-primary)}
+.ga-fileFlag{flex:none;color:var(--dsw-alias-label-caption);font-size:11px;line-height:16px;white-space:nowrap}
 .ga-graph{border:.5px solid var(--dsw-alias-border-l1);border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-base)}
 .ga-commit{display:flex;align-items:stretch;gap:10px;min-height:36px;padding:0 12px 0 8px;border-bottom:.5px solid var(--dsw-alias-border-l1)}
 .ga-commit:last-child{border-bottom:0}
@@ -912,6 +938,62 @@ window.__ModuleLoader__.load({
         return chips
       }
 
+      const renderFiles = data => {
+        const tree = data.workingTree
+        const files = Array.isArray(tree.files) ? tree.files : []
+        if (files.length === 0) return null
+        return h(
+          'section',
+          { className: 'ga-section' },
+          h(
+            'div',
+            { className: 'ga-sectionHead' },
+            h('h2', null, t('files.title')),
+            h('span', { className: 'ga-hint' }, tree.filesTruncated
+              ? t('files.truncated', { shown: files.length, total: tree.total })
+              : t('files.count', { n: tree.total })),
+          ),
+          h(
+            'ul',
+            { className: 'ga-files' },
+            files.map(file => {
+              const path = file.path || ''
+              const split = path.lastIndexOf('/')
+              const dir = split === -1 ? '' : path.slice(0, split + 1)
+              const base = split === -1 ? path : path.slice(split + 1)
+              const code = typeof file.code === 'string' && file.code !== '' ? file.code : '·'
+              const tone = code.indexOf('?') === 0 || code === '·'
+                ? 'ga-fileMuted'
+                : code.indexOf('A') !== -1
+                  ? 'ga-fileOk'
+                  : code.indexOf('D') !== -1 || code.indexOf('U') !== -1
+                    ? 'ga-fileBad'
+                    : 'ga-fileWarn'
+              return h(
+                'li',
+                { key: (file.origPath || '') + ':' + path, className: 'ga-file' },
+                h('span', { className: 'ga-fileCode ' + tone }, code),
+                h(
+                  'span',
+                  { className: 'ga-filePath', title: file.origPath ? file.origPath + ' → ' + path : path },
+                  dir !== '' ? h('span', { className: 'ga-fileDir' }, dir) : null,
+                  h('span', { className: 'ga-fileBase' }, base),
+                ),
+                file.conflicted
+                  ? h('span', { className: 'ga-fileFlag' }, t('files.conflicted'))
+                  : file.untracked
+                    ? h('span', { className: 'ga-fileFlag' }, t('files.untracked'))
+                    : file.staged && file.unstaged
+                      ? h('span', { className: 'ga-fileFlag' }, t('files.staged') + ' + ' + t('files.unstaged'))
+                      : file.staged
+                        ? h('span', { className: 'ga-fileFlag' }, t('files.staged'))
+                        : null,
+              )
+            }),
+          ),
+        )
+      }
+
       const renderGraph = data => {
         const layout = layoutCommits(data.commits)
         if (data.commits.length === 0) return h('p', { className: 'ga-quiet' }, t('graph.empty'))
@@ -1091,6 +1173,7 @@ window.__ModuleLoader__.load({
             : null,
           h('p', { className: 'ga-summary' + (dirty ? ' ga-summaryWarn' : '') }, summaryLine(data)),
           renderCards(data),
+          renderFiles(data),
           h(
             'section',
             { className: 'ga-section' },
