@@ -518,6 +518,77 @@ function parseCommitFiles(text) {
   return { files, truncated }
 }
 
+/** Resolve the final path of a numstat row, which spells renames `old => new`. */
+function resolveNumstatPath(raw) {
+  const brace = /^(.*)\{([^{}]*) => ([^{}]*)\}(.*)$/.exec(raw)
+  if (brace !== null) return brace[1] + brace[3] + brace[4]
+  const arrow = raw.lastIndexOf(' => ')
+  if (arrow !== -1) return raw.slice(arrow + 4)
+  return raw
+}
+
+/** Attach numstat additions/deletions to the rows parsed from name-status. */
+function mergeNumstat(files, text) {
+  const counts = new Map()
+  for (const line of text.split('\n')) {
+    if (line === '') continue
+    const parts = line.split('\t')
+    if (parts.length < 3) continue
+    const path = resolveNumstatPath(parts.slice(2).join('\t'))
+    counts.set(path, {
+      additions: parts[0] === '-' ? null : Number(parts[0]),
+      deletions: parts[1] === '-' ? null : Number(parts[1]),
+    })
+  }
+  for (const file of files) {
+    const entry = counts.get(file.path)
+    if (entry === undefined) continue
+    file.additions = entry.additions
+    file.deletions = entry.deletions
+  }
+}
+
+/** Split a unified patch into per-file sections by `diff --git` headers. */
+function patchSections(text) {
+  const sections = []
+  let current = null
+  for (const line of text.split('\n')) {
+    if (line.indexOf('diff --git ') === 0) {
+      if (current !== null) sections.push(current)
+      current = { header: [line], lines: [line] }
+      continue
+    }
+    if (current === null) continue
+    current.lines.push(line)
+    if (current.header.length < 8) current.header.push(line)
+  }
+  if (current !== null) sections.push(current)
+  return sections
+}
+
+/** Pick the patch section for one file, matching either side of a rename. */
+function selectPatchSection(text, file, original) {
+  const wanted = [file]
+  if (original !== null && original !== '' && original !== file) wanted.push(original)
+  for (const section of patchSections(text)) {
+    const header = section.header.join('\n') + '\n'
+    for (const target of wanted) {
+      if (header.indexOf('a/' + target + '\n') !== -1) return trimTrailing(section.lines)
+      if (header.indexOf('b/' + target + '\n') !== -1) return trimTrailing(section.lines)
+      if (header.indexOf('rename from ' + target + '\n') !== -1) return trimTrailing(section.lines)
+      if (header.indexOf('rename to ' + target + '\n') !== -1) return trimTrailing(section.lines)
+    }
+  }
+  return []
+}
+
+/** Drop the trailing empty line a patch body ends with. */
+function trimTrailing(lines) {
+  const copy = lines.slice()
+  while (copy.length > 0 && copy[copy.length - 1] === '') copy.pop()
+  return copy
+}
+
 /** Build the full snapshot for one repository root. */
 async function snapshotRepo(path, settings) {
   const root = await gitRoot(path)
@@ -715,6 +786,16 @@ function createHandler(ctx, settings) {
           return
         }
         const parsed = parseCommitFiles(output)
+        try {
+          const numstat = await runGit(
+            root,
+            ['show', '--format=', '--numstat', '-M', '--first-parent', sha],
+            { timeout: 20000 },
+          )
+          mergeNumstat(parsed.files, numstat)
+        } catch {
+          // Counts are optional; the file list still renders without them.
+        }
         respondJson(res, 200, {
           generatedAt: new Date().toISOString(),
           git,
@@ -722,6 +803,64 @@ function createHandler(ctx, settings) {
           sha,
           files: parsed.files,
           truncated: parsed.truncated,
+        })
+        return
+      }
+
+      if (pathname === `${API_PREFIX}/diff`) {
+        const requested = url.searchParams.get('path')
+        const rawSha = url.searchParams.get('sha')
+        const file = url.searchParams.get('file')
+        const original = url.searchParams.get('orig')
+        if (requested === null || requested.trim() === '' || requested.includes('\0') || requested.length > 4096) {
+          fail(res, 400, 'a repository path is required')
+          return
+        }
+        if (rawSha === null || !/^[0-9a-f]{7,40}$/i.test(rawSha)) {
+          fail(res, 400, 'a commit sha is required')
+          return
+        }
+        if (file === null || file === '' || file.includes('\0') || file.length > 4096) {
+          fail(res, 400, 'a file path is required')
+          return
+        }
+        if (!git.available) {
+          fail(res, 503, 'Git is not available on this machine')
+          return
+        }
+        const root = await gitRoot(requested)
+        if (root === null) {
+          fail(res, 404, 'not a Git repository')
+          return
+        }
+        let sha
+        try {
+          sha = (await runGit(root, ['rev-parse', '--verify', `${rawSha}^{commit}`], { timeout: 8000 })).trim()
+        } catch {
+          fail(res, 404, 'unknown commit')
+          return
+        }
+        let patch
+        try {
+          patch = await runGit(
+            root,
+            ['show', '--format=', '--first-parent', '-M', '--patch', sha],
+            { timeout: 30000, maxBuffer: 64 * 1024 * 1024 },
+          )
+        } catch (error) {
+          fail(res, 500, error instanceof Error ? error.message : String(error))
+          return
+        }
+        const lines = selectPatchSection(patch, file, original)
+        const truncated = lines.length > 2000
+        respondJson(res, 200, {
+          generatedAt: new Date().toISOString(),
+          git,
+          repo: { path: root, name: basename(root) },
+          sha,
+          path: file,
+          lines: truncated ? lines.slice(0, 2000) : lines,
+          truncated,
         })
         return
       }

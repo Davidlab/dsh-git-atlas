@@ -97,6 +97,10 @@ window.__ModuleLoader__.load({
       'commit.files': '{n} file(s)',
       'commit.noFiles': 'No file changes recorded for this commit.',
       'commit.error': "Couldn't read this commit.",
+      'diff.loading': 'Loading diff…',
+      'diff.error': "Couldn't load this diff.",
+      'diff.empty': 'No textual changes in this file (for example, a pure rename).',
+      'diff.truncated': 'Diff truncated to the first {n} lines.',
       'relative.now': 'just now',
       'relative.minutes': '{n}m ago',
       'relative.hours': '{n}h ago',
@@ -185,6 +189,10 @@ window.__ModuleLoader__.load({
       'commit.files': '{n} 个文件',
       'commit.noFiles': '该提交没有记录文件改动。',
       'commit.error': '无法读取该提交。',
+      'diff.loading': '正在加载差异…',
+      'diff.error': '无法加载该差异。',
+      'diff.empty': '该文件没有文本改动（例如纯重命名）。',
+      'diff.truncated': '差异已截断，仅显示前 {n} 行。',
       'relative.now': '刚刚',
       'relative.minutes': '{n} 分钟前',
       'relative.hours': '{n} 小时前',
@@ -254,6 +262,20 @@ window.__ModuleLoader__.load({
 .ga-commitLoading{padding:1px 0 3px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
 .ga-commitError{color:var(--dsw-alias-state-error-primary)}
 .ga-filesFlat{max-height:260px}
+.ga-fileRow{border-bottom:0}
+.ga-fileClick{cursor:pointer}
+.ga-fileClick:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ga-fileCounts{flex:none;display:flex;gap:6px;font-size:11px;line-height:16px;font-variant-numeric:tabular-nums}
+.ga-fileAdd{color:var(--dsw-alias-state-success-primary)}
+.ga-fileDel{color:var(--dsw-alias-state-error-primary)}
+.ga-diffWrap{max-height:340px;overflow:auto;border-top:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
+.ga-diff{margin:0;padding:8px 12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:17px;white-space:pre;tab-size:4;color:var(--dsw-alias-label-secondary)}
+.ga-diffLine{display:block;padding:0 4px;margin:0 -4px;border-radius:2px}
+.ga-diffAdd{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 13%,transparent);color:var(--dsw-alias-state-success-primary)}
+.ga-diffDel{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 13%,transparent);color:var(--dsw-alias-state-error-primary)}
+.ga-diffMeta{color:var(--dsw-alias-label-caption)}
+.ga-diffHunk{color:var(--dsw-alias-brand-primary)}
+.ga-diffNote{padding:8px 12px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
 .ga-graphCell{flex:none;display:flex;align-items:stretch;justify-content:flex-start}
 .ga-graphCell svg{display:block;overflow:visible}
 .ga-commitBody{flex:1;min-width:0;overflow:hidden;padding:5px 0 6px}
@@ -587,6 +609,8 @@ window.__ModuleLoader__.load({
       const [filter, setFilter] = React.useState('')
       const [expanded, setExpanded] = React.useState(null)
       const [commitFiles, setCommitFiles] = React.useState({})
+      const [diff, setDiff] = React.useState(null)
+      const [diffs, setDiffs] = React.useState({})
       const [busy, setBusy] = React.useState(false)
       const busyTimer = React.useRef(0)
       const projectsRef = React.useRef([])
@@ -599,6 +623,7 @@ window.__ModuleLoader__.load({
       const repoKey = repo !== null ? repo.path : ''
       const openSha = expanded !== null && expanded.repo === repoKey ? expanded.sha : null
       const commitCacheKey = openSha === null ? null : repoKey + '::' + openSha
+      const diffKey = diff === null || diff.repo !== repoKey ? null : diff.repo + '::' + diff.sha + '::' + diff.path
 
       React.useEffect(() => () => {
         if (busyTimer.current) window.clearTimeout(busyTimer.current)
@@ -734,6 +759,41 @@ window.__ModuleLoader__.load({
           controller.abort()
         }
       }, [commitCacheKey, openSha, repoKey])
+
+      // Lazily read one file's patch when its row is expanded.
+      React.useEffect(() => {
+        if (diffKey === null || diff === null || repo === null) return undefined
+        if (diffs[diffKey] !== undefined) return undefined
+        const controller = new AbortController()
+        const key = diffKey
+        const target = diff
+        let cancelled = false
+        setDiffs(previous => ({ ...previous, [key]: { status: 'loading' } }))
+        const query = '?path=' + encodeURIComponent(repo.path)
+          + '&sha=' + encodeURIComponent(target.sha)
+          + '&file=' + encodeURIComponent(target.path)
+          + (target.orig ? '&orig=' + encodeURIComponent(target.orig) : '')
+        fetchJson(API + '/diff' + query, controller.signal)
+          .then(body => {
+            if (cancelled) return
+            setDiffs(previous => ({
+              ...previous,
+              [key]: {
+                status: 'ready',
+                lines: Array.isArray(body.lines) ? body.lines : [],
+                truncated: body.truncated === true,
+              },
+            }))
+          })
+          .catch(error => {
+            if (cancelled || (error && error.name === 'AbortError')) return
+            setDiffs(previous => ({ ...previous, [key]: { status: 'error', error: messageOf(error) } }))
+          })
+        return () => {
+          cancelled = true
+          controller.abort()
+        }
+      }, [diffKey, repoKey])
 
       // Ambient refresh: the working tree moves while the panel is open.
       React.useEffect(() => {
@@ -1047,7 +1107,36 @@ window.__ModuleLoader__.load({
         )
       }
 
-      const renderCommitDetail = detail => {
+      const renderPatch = entry => {
+        if (entry === undefined || entry === null || entry.status === 'loading') {
+          return h('div', { className: 'ga-diffNote' }, t('diff.loading'))
+        }
+        if (entry.status === 'error') {
+          return h('div', { className: 'ga-diffNote ga-commitError' }, t('diff.error') + ' ' + (entry.error || ''))
+        }
+        const lines = Array.isArray(entry.lines) ? entry.lines : []
+        if (lines.length === 0) return h('div', { className: 'ga-diffNote' }, t('diff.empty'))
+        return h(
+          React.Fragment,
+          null,
+          h(
+            'pre',
+            { className: 'ga-diff' },
+            lines.map((line, index) => {
+              let tone = ''
+              if (line.indexOf('@@') === 0) tone = ' ga-diffHunk'
+              else if (line.indexOf('diff ') === 0 || line.indexOf('index ') === 0
+                || line.indexOf('---') === 0 || line.indexOf('+++') === 0) tone = ' ga-diffMeta'
+              else if (line.charAt(0) === '+') tone = ' ga-diffAdd'
+              else if (line.charAt(0) === '-') tone = ' ga-diffDel'
+              return h('span', { key: index, className: 'ga-diffLine' + tone }, line + '\n')
+            }),
+          ),
+          entry.truncated ? h('div', { className: 'ga-diffNote' }, t('diff.truncated', { n: lines.length })) : null,
+        )
+      }
+
+      const renderCommitDetail = (detail, sha) => {
         if (detail === undefined || detail === null || detail.status === 'loading') {
           return h('div', { className: 'ga-commitLoading' }, t('commit.loading'))
         }
@@ -1056,6 +1145,15 @@ window.__ModuleLoader__.load({
         }
         const files = Array.isArray(detail.files) ? detail.files : []
         if (files.length === 0) return h('div', { className: 'ga-commitLoading' }, t('commit.noFiles'))
+
+        const toggleDiff = file => {
+          setDiff(previous => (
+            previous !== null && previous.repo === repoKey && previous.sha === sha && previous.path === file.path
+              ? null
+              : { repo: repoKey, sha, path: file.path, orig: file.origPath }
+          ))
+        }
+
         return h(
           React.Fragment,
           null,
@@ -1066,16 +1164,43 @@ window.__ModuleLoader__.load({
             files.map(file => {
               const path = file.path || ''
               const split = path.lastIndexOf('/')
+              const fileKey = repoKey + '::' + sha + '::' + path
+              const isOpen = diffKey === fileKey
+              const entry = isOpen ? diffs[fileKey] : null
+              const counts = []
+              if (typeof file.additions === 'number') {
+                counts.push(h('span', { key: 'a', className: 'ga-fileAdd' }, '+' + file.additions))
+              }
+              if (typeof file.deletions === 'number') {
+                counts.push(h('span', { key: 'd', className: 'ga-fileDel' }, '−' + file.deletions))
+              }
               return h(
                 'li',
-                { key: path, className: 'ga-file' },
-                h('span', { className: 'ga-fileCode' }, file.code),
+                { key: path, className: 'ga-fileRow' },
                 h(
-                  'span',
-                  { className: 'ga-filePath', title: file.origPath ? file.origPath + ' → ' + path : path },
-                  split === -1 ? null : h('span', { className: 'ga-fileDir' }, path.slice(0, split + 1)),
-                  h('span', { className: 'ga-fileBase' }, split === -1 ? path : path.slice(split + 1)),
+                  'div',
+                  {
+                    className: 'ga-file ga-fileClick',
+                    role: 'button',
+                    tabIndex: 0,
+                    'aria-expanded': isOpen,
+                    onClick: () => { toggleDiff(file) },
+                    onKeyDown: event => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      event.preventDefault()
+                      toggleDiff(file)
+                    },
+                  },
+                  h('span', { className: 'ga-fileCode' }, file.code),
+                  h(
+                    'span',
+                    { className: 'ga-filePath', title: file.origPath ? file.origPath + ' → ' + path : path },
+                    split === -1 ? null : h('span', { className: 'ga-fileDir' }, path.slice(0, split + 1)),
+                    h('span', { className: 'ga-fileBase' }, split === -1 ? path : path.slice(split + 1)),
+                  ),
+                  counts.length > 0 ? h('span', { className: 'ga-fileCounts' }, counts) : null,
                 ),
+                isOpen ? h('div', { className: 'ga-diffWrap' }, renderPatch(entry)) : null,
               )
             }),
           ),
@@ -1187,7 +1312,7 @@ window.__ModuleLoader__.load({
                   ),
                 ),
               ),
-              isOpen ? h('div', { className: 'ga-commitFiles' }, renderCommitDetail(detail)) : null,
+              isOpen ? h('div', { className: 'ga-commitFiles' }, renderCommitDetail(detail, commit.sha)) : null,
             )
           }),
         )
