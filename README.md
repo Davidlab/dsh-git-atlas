@@ -9,6 +9,7 @@ Built for the case where an agent creates, commits, and pushes branches for you 
 - **Project picker** over the Harness workspace registry, plus "Open folder…" for any directory and an optional configured list.
 - **Status cards**: branch and HEAD, upstream ahead/behind, working-tree counts, remote.
 - **Changed files**: the working tree's paths with their staged, unstaged, untracked, or conflicted state.
+- **Commit detail**: click a commit to list the files it changed.
 - **Commit graph**: lanes computed from parent links across all refs, with branch, tag, and remote badges and relative times.
 - **Branch list**: local and remote, filtered by name or subject, marking `current`, `local only`, `upstream gone`, `↑n`, and `↓n`.
 

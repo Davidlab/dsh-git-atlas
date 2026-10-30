@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-git-atlas",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Left-sidebar Git status panel: pick a project, then read its branches, upstream sync state, working tree, and commit graph.",
   "exports": {

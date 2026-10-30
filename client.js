@@ -72,7 +72,7 @@ window.__ModuleLoader__.load({
       'summary.clean': 'Working tree is clean.',
       'summary.dirty': '{n} file(s) changed in the working tree.',
       'graph.title': 'Commit graph',
-      'graph.hint': 'all refs · newest {n}',
+      'graph.hint': 'newest {n} · click a commit for its files',
       'graph.empty': 'No commits yet.',
       'branches.title': 'Branches',
       'branches.count': '{local} local · {remote} remote',
@@ -93,6 +93,10 @@ window.__ModuleLoader__.load({
       'files.unstaged': 'unstaged',
       'files.untracked': 'untracked',
       'files.conflicted': 'conflicted',
+      'commit.loading': 'Reading commit…',
+      'commit.files': '{n} file(s)',
+      'commit.noFiles': 'No file changes recorded for this commit.',
+      'commit.error': "Couldn't read this commit.",
       'relative.now': 'just now',
       'relative.minutes': '{n}m ago',
       'relative.hours': '{n}h ago',
@@ -156,7 +160,7 @@ window.__ModuleLoader__.load({
       'summary.clean': '工作区干净。',
       'summary.dirty': '工作区有 {n} 个文件改动。',
       'graph.title': '提交图谱',
-      'graph.hint': '全部引用 · 最新 {n}',
+      'graph.hint': '最新 {n} · 点击提交查看改动文件',
       'graph.empty': '还没有提交。',
       'branches.title': '分支',
       'branches.count': '{local} 本地 · {remote} 远程',
@@ -177,6 +181,10 @@ window.__ModuleLoader__.load({
       'files.unstaged': '未暂存',
       'files.untracked': '未跟踪',
       'files.conflicted': '冲突',
+      'commit.loading': '正在读取提交…',
+      'commit.files': '{n} 个文件',
+      'commit.noFiles': '该提交没有记录文件改动。',
+      'commit.error': '无法读取该提交。',
       'relative.now': '刚刚',
       'relative.minutes': '{n} 分钟前',
       'relative.hours': '{n} 小时前',
@@ -236,9 +244,16 @@ window.__ModuleLoader__.load({
 .ga-fileBase{color:var(--dsw-alias-label-primary)}
 .ga-fileFlag{flex:none;color:var(--dsw-alias-label-caption);font-size:11px;line-height:16px;white-space:nowrap}
 .ga-graph{border:.5px solid var(--dsw-alias-border-l1);border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-base)}
-.ga-commit{display:flex;align-items:stretch;gap:10px;min-height:36px;padding:0 12px 0 8px;border-bottom:.5px solid var(--dsw-alias-border-l1)}
-.ga-commit:last-child{border-bottom:0}
+.ga-commitWrap{border-bottom:.5px solid var(--dsw-alias-border-l1)}
+.ga-commitWrap:last-child{border-bottom:0}
+.ga-commit{display:flex;align-items:stretch;gap:10px;min-height:36px;padding:0 12px 0 8px;cursor:pointer}
 .ga-commit:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.ga-commitOpen{background:var(--dsw-alias-interactive-bg-hover)}
+.ga-commitFiles{padding:9px 12px 11px 18px;border-top:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}
+.ga-commitFilesHead{margin:0 0 6px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
+.ga-commitLoading{padding:1px 0 3px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.ga-commitError{color:var(--dsw-alias-state-error-primary)}
+.ga-filesFlat{max-height:260px}
 .ga-graphCell{flex:none;display:flex;align-items:stretch;justify-content:flex-start}
 .ga-graphCell svg{display:block;overflow:visible}
 .ga-commitBody{flex:1;min-width:0;overflow:hidden;padding:5px 0 6px}
@@ -570,6 +585,8 @@ window.__ModuleLoader__.load({
       })
       const [snapshotState, setSnapshotState] = React.useState({ status: 'idle', data: null, error: null })
       const [filter, setFilter] = React.useState('')
+      const [expanded, setExpanded] = React.useState(null)
+      const [commitFiles, setCommitFiles] = React.useState({})
       const [busy, setBusy] = React.useState(false)
       const busyTimer = React.useRef(0)
       const projectsRef = React.useRef([])
@@ -580,6 +597,8 @@ window.__ModuleLoader__.load({
       const repos = project !== null ? project.repos : []
       const repo = repos.find(candidate => candidate.path === repoPath) || repos[0] || null
       const repoKey = repo !== null ? repo.path : ''
+      const openSha = expanded !== null && expanded.repo === repoKey ? expanded.sha : null
+      const commitCacheKey = openSha === null ? null : repoKey + '::' + openSha
 
       React.useEffect(() => () => {
         if (busyTimer.current) window.clearTimeout(busyTimer.current)
@@ -681,6 +700,40 @@ window.__ModuleLoader__.load({
           controller.abort()
         }
       }, [repoKey, projectVersion, tick])
+
+      // Lazily read one commit's changed files when its row is expanded.
+      React.useEffect(() => {
+        if (commitCacheKey === null || openSha === null || repo === null) return undefined
+        if (commitFiles[commitCacheKey] !== undefined) return undefined
+        const controller = new AbortController()
+        const key = commitCacheKey
+        const path = repo.path
+        let cancelled = false
+        setCommitFiles(previous => ({ ...previous, [key]: { status: 'loading' } }))
+        fetchJson(
+          API + '/commit?path=' + encodeURIComponent(path) + '&sha=' + encodeURIComponent(openSha),
+          controller.signal,
+        )
+          .then(body => {
+            if (cancelled) return
+            setCommitFiles(previous => ({
+              ...previous,
+              [key]: {
+                status: 'ready',
+                files: Array.isArray(body.files) ? body.files : [],
+                truncated: body.truncated === true,
+              },
+            }))
+          })
+          .catch(error => {
+            if (cancelled || (error && error.name === 'AbortError')) return
+            setCommitFiles(previous => ({ ...previous, [key]: { status: 'error', error: messageOf(error) } }))
+          })
+        return () => {
+          cancelled = true
+          controller.abort()
+        }
+      }, [commitCacheKey, openSha, repoKey])
 
       // Ambient refresh: the working tree moves while the panel is open.
       React.useEffect(() => {
@@ -994,17 +1047,59 @@ window.__ModuleLoader__.load({
         )
       }
 
+      const renderCommitDetail = detail => {
+        if (detail === undefined || detail === null || detail.status === 'loading') {
+          return h('div', { className: 'ga-commitLoading' }, t('commit.loading'))
+        }
+        if (detail.status === 'error') {
+          return h('div', { className: 'ga-commitLoading ga-commitError' }, t('commit.error') + ' ' + (detail.error || ''))
+        }
+        const files = Array.isArray(detail.files) ? detail.files : []
+        if (files.length === 0) return h('div', { className: 'ga-commitLoading' }, t('commit.noFiles'))
+        return h(
+          React.Fragment,
+          null,
+          h('div', { className: 'ga-commitFilesHead' }, t('commit.files', { n: files.length })),
+          h(
+            'ul',
+            { className: 'ga-files ga-filesFlat' },
+            files.map(file => {
+              const path = file.path || ''
+              const split = path.lastIndexOf('/')
+              return h(
+                'li',
+                { key: path, className: 'ga-file' },
+                h('span', { className: 'ga-fileCode' }, file.code),
+                h(
+                  'span',
+                  { className: 'ga-filePath', title: file.origPath ? file.origPath + ' → ' + path : path },
+                  split === -1 ? null : h('span', { className: 'ga-fileDir' }, path.slice(0, split + 1)),
+                  h('span', { className: 'ga-fileBase' }, split === -1 ? path : path.slice(split + 1)),
+                ),
+              )
+            }),
+          ),
+        )
+      }
+
       const renderGraph = data => {
         const layout = layoutCommits(data.commits)
         if (data.commits.length === 0) return h('p', { className: 'ga-quiet' }, t('graph.empty'))
         const pitch = layout.laneCount > 9 ? 10 : LANE_PITCH
         const width = 18 + layout.laneCount * pitch
         const x = lane => 9 + lane * pitch
+        const toggle = sha => {
+          setExpanded(previous => (
+            previous !== null && previous.repo === repoKey && previous.sha === sha ? null : { repo: repoKey, sha }
+          ))
+        }
         return h(
           'div',
           { className: 'ga-graph' },
           layout.rows.map(row => {
             const commit = row.commit
+            const isOpen = openSha === commit.sha
+            const detail = isOpen ? commitFiles[commitCacheKey] : null
             const paths = []
             row.after.forEach((sha, lane) => {
               if (sha === null || sha === undefined) return
@@ -1052,34 +1147,47 @@ window.__ModuleLoader__.load({
             }
             return h(
               'div',
-              {
-                key: commit.sha,
-                className: 'ga-commit' + (row.head ? ' ga-commitHead' : ''),
-                title: commit.sha + '\n' + (commit.subject || ''),
-              },
+              { key: commit.sha, className: 'ga-commitWrap' },
               h(
                 'div',
-                { className: 'ga-graphCell', style: { width: width + 'px' } },
-                h(
-                  'svg',
-                  { width: width, height: ROW_HEIGHT, viewBox: '0 0 ' + width + ' ' + ROW_HEIGHT, 'aria-hidden': 'true' },
-                  paths,
-                ),
-              ),
-              h(
-                'div',
-                { className: 'ga-commitBody' },
-                h('div', { className: 'ga-subject' }, commit.subject || t('commit.noSubject')),
+                {
+                  className: 'ga-commit' + (row.head ? ' ga-commitHead' : '') + (isOpen ? ' ga-commitOpen' : ''),
+                  role: 'button',
+                  tabIndex: 0,
+                  'aria-expanded': isOpen,
+                  title: commit.sha + '\n' + (commit.subject || ''),
+                  onClick: () => { toggle(commit.sha) },
+                  onKeyDown: event => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return
+                    event.preventDefault()
+                    toggle(commit.sha)
+                  },
+                },
                 h(
                   'div',
-                  { className: 'ga-commitMeta' },
-                  renderRefChips(commit.refs),
-                  h('span', { className: 'ga-sha', title: commit.sha }, commit.short),
-                  h('span', { className: 'ga-metaText', title: commit.author }, commit.author || '—'),
-                  h('span', { className: 'ga-metaSep' }, '·'),
-                  h('span', { className: 'ga-metaText' }, relativeTime(commit.time, t)),
+                  { className: 'ga-graphCell', style: { width: width + 'px' } },
+                  h(
+                    'svg',
+                    { width, height: ROW_HEIGHT, viewBox: '0 0 ' + width + ' ' + ROW_HEIGHT, 'aria-hidden': 'true' },
+                    paths,
+                  ),
+                ),
+                h(
+                  'div',
+                  { className: 'ga-commitBody' },
+                  h('div', { className: 'ga-subject' }, commit.subject || t('commit.noSubject')),
+                  h(
+                    'div',
+                    { className: 'ga-commitMeta' },
+                    renderRefChips(commit.refs),
+                    h('span', { className: 'ga-sha', title: commit.sha }, commit.short),
+                    h('span', { className: 'ga-metaText', title: commit.author }, commit.author || '—'),
+                    h('span', { className: 'ga-metaSep' }, '·'),
+                    h('span', { className: 'ga-metaText' }, relativeTime(commit.time, t)),
+                  ),
                 ),
               ),
+              isOpen ? h('div', { className: 'ga-commitFiles' }, renderCommitDetail(detail)) : null,
             )
           }),
         )

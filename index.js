@@ -492,6 +492,32 @@ async function readCommits(root, oid, limit) {
   return commits
 }
 
+/** Parse `--name-status` output for one commit into file rows. */
+function parseCommitFiles(text) {
+  const files = []
+  let truncated = false
+  for (const line of text.split('\n')) {
+    if (line === '') continue
+    const parts = line.split('\t')
+    if (parts.length < 2) continue
+    const code = parts[0].charAt(0)
+    if ('ACDMRTUX'.indexOf(code) === -1) continue
+    if (files.length >= MAX_FILES) {
+      truncated = true
+      break
+    }
+    const renamed = code === 'R' || code === 'C'
+    const path = renamed ? parts[2] : parts[1]
+    if (path === undefined || path === '') continue
+    files.push({
+      code,
+      path,
+      origPath: renamed && parts[1] !== '' ? parts[1] : undefined,
+    })
+  }
+  return { files, truncated }
+}
+
 /** Build the full snapshot for one repository root. */
 async function snapshotRepo(path, settings) {
   const root = await gitRoot(path)
@@ -646,6 +672,56 @@ function createHandler(ctx, settings) {
           generatedAt: new Date().toISOString(),
           git,
           ...snapshot,
+        })
+        return
+      }
+
+      if (pathname === `${API_PREFIX}/commit`) {
+        const requested = url.searchParams.get('path')
+        const rawSha = url.searchParams.get('sha')
+        if (requested === null || requested.trim() === '' || requested.includes('\0') || requested.length > 4096) {
+          fail(res, 400, 'a repository path is required')
+          return
+        }
+        if (rawSha === null || !/^[0-9a-f]{7,40}$/i.test(rawSha)) {
+          fail(res, 400, 'a commit sha is required')
+          return
+        }
+        if (!git.available) {
+          fail(res, 503, 'Git is not available on this machine')
+          return
+        }
+        const root = await gitRoot(requested)
+        if (root === null) {
+          fail(res, 404, 'not a Git repository')
+          return
+        }
+        let sha
+        try {
+          sha = (await runGit(root, ['rev-parse', '--verify', `${rawSha}^{commit}`], { timeout: 8000 })).trim()
+        } catch {
+          fail(res, 404, 'unknown commit')
+          return
+        }
+        let output
+        try {
+          output = await runGit(
+            root,
+            ['show', '--format=', '--name-status', '-M', '--first-parent', sha],
+            { timeout: 20000 },
+          )
+        } catch (error) {
+          fail(res, 500, error instanceof Error ? error.message : String(error))
+          return
+        }
+        const parsed = parseCommitFiles(output)
+        respondJson(res, 200, {
+          generatedAt: new Date().toISOString(),
+          git,
+          repo: { path: root, name: basename(root) },
+          sha,
+          files: parsed.files,
+          truncated: parsed.truncated,
         })
         return
       }
